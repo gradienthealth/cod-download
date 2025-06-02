@@ -251,39 +251,40 @@ class CodDownload {
         { create: true }
       );
 
-      for (let index = 0; index < files.length; index++) {
-        try {
-          const fileName =
-            files[index].name.split("/").at(-1) ||
-            `instance${Math.random() * 10000}`;
-          const blob = new Blob([files[index].buffer], {
-            type: "application/dicom",
-          });
+      await Promise.all(
+        files.map(async ({ name, buffer }) => {
+          try {
+            const fileName =
+              name.split("/").at(-1) || `instance${Math.random() * 10000}`;
+            const blob = new Blob([buffer], {
+              type: "application/dicom",
+            });
 
-          const fileHandle = await instancesHandle.getFileHandle(
-            fileName.split(".dcm")[0],
-            {
-              create: true,
-            }
-          );
-          const writable = await fileHandle.createWritable();
-          await writable.write(blob);
-          await writable.close();
+            const fileHandle = await instancesHandle.getFileHandle(
+              fileName.split(".dcm")[0],
+              {
+                create: true,
+              }
+            );
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
 
-          this.logs.push(
-            this.createLogString(
-              studyInstanceUID,
-              seriesInstanceUID,
-              fileName.split(".dcm")[0]
-            )
-          );
-        } catch (error) {
-          console.warn(
-            `CodDownload: Error writing the file ${seriesInstanceUID}/${files[index].name}:`,
-            error
-          );
-        }
-      }
+            this.logs.push(
+              this.createLogString(
+                studyInstanceUID,
+                seriesInstanceUID,
+                fileName.split(".dcm")[0]
+              )
+            );
+          } catch (error) {
+            console.warn(
+              `CodDownload: Error writing the file ${seriesInstanceUID}/${name}:`,
+              error
+            );
+          }
+        })
+      );
     } catch (error) {
       this.handleError(
         `CodDownload: Error Writing series ${url}: `,
