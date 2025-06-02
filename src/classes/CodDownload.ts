@@ -260,12 +260,9 @@ class CodDownload {
               type: "application/dicom",
             });
 
-            const fileHandle = await instancesHandle.getFileHandle(
-              fileName.split(".dcm")[0],
-              {
-                create: true,
-              }
-            );
+            const fileHandle = await instancesHandle.getFileHandle(fileName, {
+              create: true,
+            });
             const writable = await fileHandle.createWritable();
             await writable.write(blob);
             await writable.close();

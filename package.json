@@ -1,6 +1,6 @@
 {
   "name": "cod-retrieve",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "A repo to retrieve/ download study dicom files in the specified local folder.",
   "main": "dist/index.js",
   "type": "module",
