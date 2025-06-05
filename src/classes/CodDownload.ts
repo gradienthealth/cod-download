@@ -55,6 +55,9 @@ class CodDownload {
       this.parseBucketDetails(bucketDetails);
     } else {
       this.bucketDetails = bucketDetails;
+      this.headers = {
+        Authorization: `Bearer ${bucketDetails.token}`,
+      };
     }
   }
 
@@ -304,14 +307,6 @@ class CodDownload {
     sopInstanceUID: string
   ): string {
     return `${studyInstanceUID}/${seriesInstanceUID}/${sopInstanceUID}`;
-  }
-
-  parseUIDs(url: string): {
-    studyInstanceUID: string;
-    seriesInstanceUID: string;
-  } {
-    const urlParts = url.split("studies/")[1].split("/");
-    return { studyInstanceUID: urlParts[0], seriesInstanceUID: urlParts[2] };
   }
 
   private handleError(message: string, error: Error): Error {
