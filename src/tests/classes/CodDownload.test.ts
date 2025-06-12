@@ -152,7 +152,7 @@ describe("CodDownload", () => {
     expect(errorCallback).toHaveBeenCalledTimes(0);
   });
 
-  it("should resume the extract", async () => {
+  it("should resume the extract and saving", async () => {
     // mock the fetch to throw an error when the string error is in the url
     global.fetch = jest.fn((url: string) => {
       if (url.includes("delimiter")) {
@@ -182,7 +182,7 @@ describe("CodDownload", () => {
     jest.spyOn(codDownload, "getLogs").mockResolvedValue();
     const handleSavingSpy = jest.spyOn(codDownload, "handleSaving");
 
-    const extractedCallback = jest.fn();
+    const savedCallback = jest.fn();
     const errorCallback = jest.fn();
 
     const studyUIDs = ["studyUID.1", "studyUID.2"];
@@ -193,11 +193,11 @@ describe("CodDownload", () => {
 
     // First time downloading, should trigger error for two, and fetch three
     const job1 = await codDownload.download(studyUIDs);
-    job1.onExtract(extractedCallback);
+    job1.onSave(savedCallback);
     job1.onError(errorCallback);
 
     jest.spyOn(job1, "untarTarFile").mockResolvedValue([]);
-    handleSavingSpy.mockImplementation((url) => {
+    handleSavingSpy.mockImplementation((url, files, callbacks) => {
       if (url.includes("error")) {
         // Since we have specified to create metadata of the first two series with error in their url,
         // we can throw error for those two series.
@@ -218,35 +218,41 @@ describe("CodDownload", () => {
           )
         )
       );
+      // @ts-ignore
+      callbacks.forEach((callback) => callback());
       return Promise.resolve();
     });
 
     await job1.start();
 
     expect(getMetadataSpy).toHaveBeenCalledTimes(totalSeries);
-    expect(extractedCallback).toHaveBeenCalledTimes(totalSeries - errorSeries);
     expect(errorCallback).toHaveBeenCalledTimes(errorSeries);
+    expect(savedCallback).toHaveBeenCalledTimes(totalSeries - errorSeries);
 
     // Clearing the mock calls
     getMetadataSpy.mockClear();
-    extractedCallback.mockClear();
+    savedCallback.mockClear();
     errorCallback.mockClear();
 
     const restOfTheSeries = errorSeries;
 
     // Second time downloading, should fetch only 2 error cases from first
     const job2 = await codDownload.download(["studyUID.1", "studyUID.2"]);
-    job2.onExtract(extractedCallback);
+    job2.onSave(savedCallback);
     job2.onError(errorCallback);
 
     jest.spyOn(job2, "untarTarFile").mockResolvedValue([]);
     // On the second time, we are not throwing ans errors so that the restOfTheeries can be extracted.
-    handleSavingSpy.mockResolvedValue();
+    handleSavingSpy.mockImplementation((url, files, callbacks) => {
+      // @ts-ignore
+      callbacks.forEach((callback) => callback());
+      return Promise.resolve();
+    });
 
     await job2.start();
 
     expect(getMetadataSpy).toHaveBeenCalledTimes(totalSeries);
-    expect(extractedCallback).toHaveBeenCalledTimes(restOfTheSeries);
+    expect(savedCallback).toHaveBeenCalledTimes(restOfTheSeries);
     expect(errorCallback).toHaveBeenCalledTimes(0);
   });
 });

@@ -6,6 +6,7 @@ import {
   ExtractedCallbackFn,
   ExtractedTarFile,
   FilesToFetch,
+  SavedCallbackFn,
 } from "../types";
 
 class Job {
@@ -13,22 +14,31 @@ class Job {
   private headers: HeadersInit;
   private handleSaving: (
     url: string,
-    files: ExtractedTarFile[]
+    files: ExtractedTarFile[],
+    callbacks: SavedCallbackFn[]
   ) => Promise<void> = () => Promise.resolve();
+  private handleZipping?: () => Promise<void>;
 
   private downloadedCallbacks: DownloadedCallbackFn[] = [];
   private extractedCallbacks: ExtractedCallbackFn[] = [];
+  private savedCallbacks: SavedCallbackFn[] = [];
   private completedCallbacks: CompletedCallbackFn[] = [];
   private errorCallbacks: ErrorCallbackFn[] = [];
 
   constructor(
     filesToFetch: FilesToFetch,
     headers: HeadersInit,
-    handleSaving: (url: string, files: ExtractedTarFile[]) => Promise<void>
+    handleSaving: (
+      url: string,
+      files: ExtractedTarFile[],
+      callbacks: SavedCallbackFn[]
+    ) => Promise<void>,
+    handleZipping?: () => Promise<void>
   ) {
     this.filesToFetch = filesToFetch;
     this.headers = headers;
     this.handleSaving = handleSaving;
+    this.handleZipping = handleZipping;
   }
 
   async start(): Promise<void> {
@@ -54,11 +64,11 @@ class Job {
           try {
             extractedFiles = await this.untarTarFile(fetchedFile);
 
-            await this.handleSaving(url, extractedFiles);
-
             this.extractedCallbacks.forEach((callback) => {
               callback({ url, size, files: extractedFiles });
             });
+
+            await this.handleSaving(url, extractedFiles, this.savedCallbacks);
           } catch (error) {
             this.errorCallbacks.forEach((callback) =>
               callback({ url, size, error: error as Error })
@@ -69,6 +79,9 @@ class Job {
     );
 
     try {
+      if (this.handleZipping) {
+        await this.handleZipping();
+      }
       this.completedCallbacks.forEach((callback) => {
         callback({ files: this.filesToFetch });
       });
@@ -87,6 +100,10 @@ class Job {
     this.extractedCallbacks.push(callback);
   }
 
+  onSave(callback: SavedCallbackFn) {
+    this.savedCallbacks.push(callback);
+  }
+
   onComplete(callback: CompletedCallbackFn) {
     this.completedCallbacks.push(callback);
   }
@@ -97,7 +114,7 @@ class Job {
 
   async untarTarFile(arrayBuffer: ArrayBuffer): Promise<ExtractedTarFile[]> {
     return untar(arrayBuffer).catch((error: Error) => {
-      console.error("Untar error:", error);
+      throw new Error("Untar error:", error);
     });
   }
 }

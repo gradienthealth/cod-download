@@ -11,6 +11,7 @@ export type DownloadStats = {
   totalSavedSeriesCount: number;
   totalSizeBytes: number;
   totalSavedSizeBytes: number;
+  series: string[];
   items: string[];
 };
 
@@ -78,16 +79,21 @@ export type ExtractedTarFile = { name: string; buffer: Uint8Array };
 export type DownloadedCallbackFn = (props: {
   url: string;
   size: number;
-  file?: ArrayBuffer;
+  file: ArrayBuffer;
 }) => void;
 
 export type ExtractedCallbackFn = (props: {
   url: string;
   size: number;
-  files?: ExtractedTarFile[];
+  files: ExtractedTarFile[];
 }) => void;
 
-export type CompletedCallbackFn = (props: { files?: FilesToFetch }) => void;
+export type SavedCallbackFn = (props: {
+  url: string;
+  file: ExtractedTarFile;
+}) => void;
+
+export type CompletedCallbackFn = (props: { files: FilesToFetch }) => void;
 
 export type ErrorCallbackFn = (props: {
   url?: string;

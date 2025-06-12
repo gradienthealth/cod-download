@@ -1,3 +1,5 @@
+import JsZip from "jszip";
+
 import Job from "./Job";
 import {
   BucketDetails,
@@ -5,6 +7,7 @@ import {
   ExtractedTarFile,
   FilesToFetch,
   JsonMetadata,
+  SavedCallbackFn,
 } from "../types";
 import metadataManager from "./MetadataManager";
 
@@ -24,6 +27,7 @@ class CodDownload {
     totalSavedSeriesCount: 0,
     totalSizeBytes: 0,
     totalSavedSizeBytes: 0,
+    series: [],
     items: [],
   };
 
@@ -40,6 +44,7 @@ class CodDownload {
         totalSavedSeriesCount: 0,
         totalSizeBytes: 0,
         totalSavedSizeBytes: 0,
+        series: [],
         items: [],
       };
     } catch (error) {
@@ -75,13 +80,17 @@ class CodDownload {
     }
   }
 
-  async download(studyInstanceUIDs: string[]): Promise<Job> {
+  async download(
+    studyInstanceUIDs: string[],
+    zipOutput: boolean = false
+  ): Promise<Job> {
     await this.getStats(studyInstanceUIDs);
 
     const job = new Job(
       this.filesToFetch,
       this.headers,
-      this.handleSaving.bind(this)
+      this.handleSaving.bind(this),
+      zipOutput ? this.handleZipping.bind(this) : undefined
     );
 
     return job;
@@ -103,6 +112,15 @@ class CodDownload {
           (error as Error).message
       );
     }
+  }
+
+  async updateLogs() {
+    const logFileHandle = await this.directoryHandle.getFileHandle("log.json", {
+      create: true,
+    });
+    const logWritable = await logFileHandle.createWritable();
+    await logWritable.write(JSON.stringify({ logs: this.logs }));
+    await logWritable.close();
   }
 
   parseBucketDetails(bucketDetails: string): void {
@@ -227,14 +245,70 @@ class CodDownload {
         size: sizeBytes,
       });
       this.stats.totalSizeBytes += sizeBytes;
+      this.stats.items.push(
+        ...Object.values(metadata.cod.instances).map(
+          ({ url, uri }) => url || uri
+        )
+      );
     });
 
-    this.stats.items = this.filesToFetch.map(({ url }) =>
+    this.stats.series = this.filesToFetch.map(({ url }) =>
       url.split("studies/")[1].replaceAll("/", "/ ")
     );
   }
 
-  async handleSaving(url: string, files: ExtractedTarFile[]) {
+  async handleZipping() {
+    const studyUIDs = this.filesToFetch.reduce((result: string[], { url }) => {
+      const studyUID = url.split("studies/")[1].split("/series")[0];
+      if (!result.includes(studyUID)) {
+        result.push(studyUID);
+      }
+      return result;
+    }, []);
+
+    async function addEntriesToZip(
+      files: { name: string; file: File }[],
+      zipRoot: JsZip
+    ) {
+      await Promise.all(
+        files.map(async ({ name, file }) => {
+          const fileData = new Blob([await file.arrayBuffer()], {
+            type: "application/dicom",
+          });
+          zipRoot.file(name, fileData, { createFolders: true });
+        })
+      );
+    }
+
+    await Promise.all(
+      studyUIDs.map(async (studyInstanceUID) => {
+        const zip = new JsZip();
+        const studyDirHandle = await this.directoryHandle.getDirectoryHandle(
+          studyInstanceUID
+        );
+
+        const files = await this.readDirectory(studyDirHandle);
+        await addEntriesToZip(files, zip);
+
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${studyInstanceUID}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      })
+    );
+  }
+
+  async handleSaving(
+    url: string,
+    files: ExtractedTarFile[],
+    callbacks: SavedCallbackFn[]
+  ) {
     try {
       const [studyInstanceUID, , seriesInstanceUID] = url
         .split("studies/")[1]
@@ -255,8 +329,9 @@ class CodDownload {
       );
 
       await Promise.all(
-        files.map(async ({ name, buffer }) => {
+        files.map(async (file) => {
           try {
+            const { name, buffer } = file;
             const fileName =
               name.split("/").at(-1) || `instance${Math.random() * 10000}`;
             const blob = new Blob([buffer], {
@@ -270,6 +345,10 @@ class CodDownload {
             await writable.write(blob);
             await writable.close();
 
+            callbacks.forEach((callback) => {
+              callback({ url, file });
+            });
+
             this.logs.push(
               this.createLogString(
                 studyInstanceUID,
@@ -279,7 +358,7 @@ class CodDownload {
             );
           } catch (error) {
             console.warn(
-              `CodDownload: Error writing the file ${seriesInstanceUID}/${name}:`,
+              `CodDownload: Error writing the file ${seriesInstanceUID}/${file.name}:`,
               error
             );
           }
@@ -291,14 +370,29 @@ class CodDownload {
         error as Error
       );
     } finally {
-      const logFileHandle = await this.directoryHandle.getFileHandle(
-        "log.json",
-        { create: true }
-      );
-      const logWritable = await logFileHandle.createWritable();
-      await logWritable.write(JSON.stringify({ logs: this.logs }));
-      await logWritable.close();
+      await this.updateLogs();
     }
+  }
+
+  async readDirectory(
+    dirHandle: FileSystemDirectoryHandle,
+    rootPath: string = ""
+  ): Promise<{ name: string; file: File }[]> {
+    const entries = await Array.fromAsync(dirHandle.entries());
+
+    const promises = entries.map(async ([name, handle]) => {
+      const path = rootPath ? `${rootPath}/${name}` : name;
+      if (handle instanceof FileSystemFileHandle) {
+        const file = await handle.getFile();
+        return [{ name: path, file }];
+      } else if (handle instanceof FileSystemDirectoryHandle) {
+        const nestedContent = await this.readDirectory(handle, path);
+        return nestedContent;
+      }
+      return Promise.resolve([]);
+    });
+
+    return (await Promise.all(promises)).flat(10);
   }
 
   createLogString(
@@ -329,6 +423,7 @@ class CodDownload {
       totalSavedSeriesCount: 0,
       totalSizeBytes: 0,
       totalSavedSizeBytes: 0,
+      series: [],
       items: [],
     };
   }

@@ -49,9 +49,10 @@ Examples for object input:
 
 Fetches metadata for the specified study instance UIDs from the cloud bucket, calculates download statistics such as total series count, total size, and how many series are already saved locally. Returns a `DownloadStats` object with this information.
 
-### `download(studyInstanceUIDs: string[])`
+### `download(studyInstanceUIDs: string[], zipOutput?: boolean)`
 
 Starts the download process for the specified study instance UIDs. It first calls `getStats` to prepare the list of files to fetch, then creates and returns a `Job` instance that manages the download and extraction of files.
+- If `zipOutput` is `true`, the downloaded files will be zipped for each study and downloaded in default download folder.
 
 ---
 
