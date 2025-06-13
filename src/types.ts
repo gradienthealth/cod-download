@@ -76,6 +76,12 @@ export type JsonMetadata = {
 
 export type ExtractedTarFile = { name: string; buffer: Uint8Array };
 
+export type ProgressCallbackFn = (props: {
+  url: string;
+  bytesDownloaded: number;
+  bytesTotal: number;
+}) => void;
+
 export type DownloadedCallbackFn = (props: {
   url: string;
   size: number;

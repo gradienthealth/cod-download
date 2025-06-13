@@ -50,24 +50,25 @@ describe("CodDownload", () => {
   });
 
   it("should resume the download", async () => {
-    global.fetch = jest.fn((url: string) => {
-      if (url.includes("delimiter")) {
-        const studyUID = url.split("studies/")[1].split("/series")[0];
-        const prefixes = mockPrefixes.filter((fileUrl) =>
-          fileUrl.includes(studyUID)
-        );
-        return Promise.resolve({
-          json: () => Promise.resolve({ prefixes }),
-        } as Response);
-      } else if (url.includes("error")) {
+    // mock the fetchStream to throw an error when the string error is in the url
+    const fetchFilesMockFn = (allowError: boolean, url: string) => {
+      if (allowError && url.includes("error")) {
         // Since we have specified to create metadata of the first two series with error in their url,
         // we can throw error for those two series.
         return Promise.reject(new Error("Fetch error triggered by URL"));
       } else {
-        return Promise.resolve({
-          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-        } as Response);
+        return Promise.resolve(new ArrayBuffer(0));
       }
+    };
+
+    global.fetch = jest.fn((url: string) => {
+      const studyUID = url.split("studies/")[1].split("/series")[0];
+      const prefixes = mockPrefixes.filter((fileUrl) =>
+        fileUrl.includes(studyUID)
+      );
+      return Promise.resolve({
+        json: () => Promise.resolve({ prefixes }),
+      } as Response);
     }) as jest.Mock;
 
     // We will mock the metadataManager.getMetadata function to throw an error for first two series
@@ -109,6 +110,11 @@ describe("CodDownload", () => {
 
     // First time downloading, should trigger error for two, and fetch three
     const job1 = await codDownload.download(studyUIDs);
+
+    jest
+      .spyOn(job1, "streamFetchToBuffer")
+      .mockImplementation(fetchFilesMockFn.bind(null, true));
+
     job1.onDownload(downloadCallback);
     job1.onError(errorCallback);
     await job1.start();
@@ -117,23 +123,6 @@ describe("CodDownload", () => {
     expect(errorCallback).toHaveBeenCalledTimes(errorSeries);
     expect(downloadCallback).toHaveBeenCalledTimes(totalSeries - errorSeries);
 
-    global.fetch = jest.fn((url: string) => {
-      if (url.includes("delimiter")) {
-        const studyUID = url.split("studies/")[1].split("/series")[0];
-        const prefixes = mockPrefixes.filter((fileUrl) =>
-          fileUrl.includes(studyUID)
-        );
-        return Promise.resolve({
-          json: () => Promise.resolve({ prefixes }),
-        } as Response);
-      } else {
-        // We are resolving all the calls for the second download
-        return Promise.resolve({
-          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-        } as Response);
-      }
-    }) as jest.Mock;
-
     // Clearing the mock calls.
     getMetadataSpy.mockClear();
     downloadCallback.mockClear();
@@ -141,6 +130,11 @@ describe("CodDownload", () => {
 
     // Second time downloading, should fetch only 2 error cases from first.
     const job2 = await codDownload.download(studyUIDs);
+
+    jest
+      .spyOn(job2, "streamFetchToBuffer")
+      .mockImplementation(fetchFilesMockFn.bind(null, false));
+
     job2.onDownload(downloadCallback);
     job2.onError(errorCallback);
     await job2.start();
@@ -153,21 +147,25 @@ describe("CodDownload", () => {
   });
 
   it("should resume the extract and saving", async () => {
-    // mock the fetch to throw an error when the string error is in the url
-    global.fetch = jest.fn((url: string) => {
-      if (url.includes("delimiter")) {
-        const studyUID = url.split("studies/")[1].split("/series")[0];
-        const prefixes = mockPrefixes.filter((fileUrl) =>
-          fileUrl.includes(studyUID)
-        );
-        return Promise.resolve({
-          json: () => Promise.resolve({ prefixes }),
-        } as Response);
+    // mock the fetchStream to throw an error when the string error is in the url
+    const fetchFilesMockFn = (allowError: boolean, url: string) => {
+      if (allowError && url.includes("error")) {
+        // Since we have specified to create metadata of the first two series with error in their url,
+        // we can throw error for those two series.
+        return Promise.reject(new Error("Fetch error triggered by URL"));
       } else {
-        return Promise.resolve({
-          arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
-        } as Response);
+        return Promise.resolve(new ArrayBuffer(10));
       }
+    };
+
+    global.fetch = jest.fn((url: string) => {
+      const studyUID = url.split("studies/")[1].split("/series")[0];
+      const prefixes = mockPrefixes.filter((fileUrl) =>
+        fileUrl.includes(studyUID)
+      );
+      return Promise.resolve({
+        json: () => Promise.resolve({ prefixes }),
+      } as Response);
     }) as jest.Mock;
 
     // We will mock the metadataManager.getMetadata function to throw an error for first two series
@@ -193,9 +191,13 @@ describe("CodDownload", () => {
 
     // First time downloading, should trigger error for two, and fetch three
     const job1 = await codDownload.download(studyUIDs);
+
     job1.onSave(savedCallback);
     job1.onError(errorCallback);
 
+    jest
+      .spyOn(job1, "streamFetchToBuffer")
+      .mockImplementation(fetchFilesMockFn.bind(null, true));
     jest.spyOn(job1, "untarTarFile").mockResolvedValue([]);
     handleSavingSpy.mockImplementation((url, files, callbacks) => {
       if (url.includes("error")) {
@@ -241,6 +243,9 @@ describe("CodDownload", () => {
     job2.onSave(savedCallback);
     job2.onError(errorCallback);
 
+    jest
+      .spyOn(job2, "streamFetchToBuffer")
+      .mockImplementation(fetchFilesMockFn.bind(null, false));
     jest.spyOn(job2, "untarTarFile").mockResolvedValue([]);
     // On the second time, we are not throwing ans errors so that the restOfTheeries can be extracted.
     handleSavingSpy.mockImplementation((url, files, callbacks) => {

@@ -52,6 +52,7 @@ Fetches metadata for the specified study instance UIDs from the cloud bucket, ca
 ### `download(studyInstanceUIDs: string[], zipOutput?: boolean)`
 
 Starts the download process for the specified study instance UIDs. It first calls `getStats` to prepare the list of files to fetch, then creates and returns a `Job` instance that manages the download and extraction of files.
+
 - If `zipOutput` is `true`, the downloaded files will be zipped for each study and downloaded in default download folder.
 
 ---
@@ -62,12 +63,14 @@ The `Job` class manages the download and extraction of files. It provides the fo
 
 ### `start()`
 
-Begins the download job. It fetches each file, extracts its contents, saves the files using the provided saving handler, and triggers the registered callbacks for download progress, extraction, completion, and errors.
+Begins the download job. It fetches each file by streaming, extracts its contents, saves the files using the provided saving handler, and triggers the registered callbacks for progress, download, extraction, save, completion, and errors.
 
 ### Callback Registration Methods
 
+- `onProgress(callback: ProgressCallbackFn)`: Register a callback to be called after each chunk of data is downloaded for each file streaming.
 - `onDownload(callback: DownloadedCallbackFn)`: Register a callback to be called after each file is downloaded.
-- `onExtract(callback: ExtractedCallbackFn)`: Register a callback to be called after each file is extracted and saved.
+- `onExtract(callback: ExtractedCallbackFn)`: Register a callback to be called after each file is extracted.
+- `onSave(callback: SavedCallbackFn)`: Register a callback to be called after each file is saved.
 - `onComplete(callback: CompletedCallbackFn)`: Register a callback to be called when the job is completed.
 - `onError(callback: ErrorCallbackFn)`: Register a callback to be called if any error occurs during the job.
 
@@ -102,12 +105,22 @@ async function downloadStudy() {
   const job = await codDownload.download(studyInstanceUIDs);
 
   // Register callbacks to monitor progress
+  let downloaded = 0;
+  job.onProgress(({ url, bytesDownloaded, bytesTotal }) => {
+    downloaded += bytesDownloaded;
+    console.log(`Downloading ${url}... ${downloaded} / ${bytesTotal} bytes`);
+  });
+
   job.onDownload(({ url, size, file }) => {
     console.log(`Downloaded: ${url} (${size} bytes)`, file);
   });
 
   job.onExtract(({ url, files }) => {
     console.log(`Extracted files from: ${url}`, files);
+  });
+
+  job.onSave(({ url, file }) => {
+    console.log(`Saved file: ${url}`, file);
   });
 
   job.onComplete(() => {

@@ -6,6 +6,7 @@ import {
   ExtractedCallbackFn,
   ExtractedTarFile,
   FilesToFetch,
+  ProgressCallbackFn,
   SavedCallbackFn,
 } from "../types";
 
@@ -19,6 +20,7 @@ class Job {
   ) => Promise<void> = () => Promise.resolve();
   private handleZipping?: () => Promise<void>;
 
+  private progressCallbacks: ProgressCallbackFn[] = [];
   private downloadedCallbacks: DownloadedCallbackFn[] = [];
   private extractedCallbacks: ExtractedCallbackFn[] = [];
   private savedCallbacks: SavedCallbackFn[] = [];
@@ -46,9 +48,7 @@ class Job {
       this.filesToFetch.map(async ({ url, size }) => {
         let fetchedFile: ArrayBuffer = new ArrayBuffer();
         try {
-          fetchedFile = await fetch(url, { headers: this.headers }).then(
-            (res) => res.arrayBuffer()
-          );
+          fetchedFile = await this.streamFetchToBuffer(url, this.headers);
 
           this.downloadedCallbacks.forEach((callback) => {
             callback({ url, size, file: fetchedFile });
@@ -92,6 +92,10 @@ class Job {
     }
   }
 
+  onProgress(callback: ProgressCallbackFn) {
+    this.progressCallbacks.push(callback);
+  }
+
   onDownload(callback: DownloadedCallbackFn) {
     this.downloadedCallbacks.push(callback);
   }
@@ -110,6 +114,49 @@ class Job {
 
   onError(callback: ErrorCallbackFn) {
     this.errorCallbacks.push(callback);
+  }
+
+  async streamFetchToBuffer(url: string, headers: HeadersInit) {
+    const response = await fetch(url, { headers });
+
+    const totalLength = +(response.headers.get("Content-Length") || "");
+    if (!totalLength) {
+      throw new Error("Content-Length header is missing or invalid.");
+    }
+
+    const fullBuffer = new Uint8Array(totalLength);
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("Failed to get response body reader.");
+    }
+
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      fullBuffer.set(value, received);
+      received += value.length;
+
+      this.progressCallbacks.forEach((callback) => {
+        callback({
+          url,
+          bytesDownloaded: value.length,
+          bytesTotal: totalLength,
+        });
+      });
+    }
+
+    if (received !== totalLength) {
+      throw new Error(
+        `Downloaded size (${received}) does not match Content-Length (${totalLength})`
+      );
+    }
+
+    return fullBuffer.buffer;
   }
 
   async untarTarFile(arrayBuffer: ArrayBuffer): Promise<ExtractedTarFile[]> {
