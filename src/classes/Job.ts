@@ -1,10 +1,8 @@
-import untar from "js-untar";
 import {
   CompletedCallbackFn,
   DownloadedCallbackFn,
   ErrorCallbackFn,
   ExtractedCallbackFn,
-  ExtractedTarFile,
   FilesToFetch,
   ProgressCallbackFn,
   SavedCallbackFn,
@@ -15,8 +13,9 @@ class Job {
   private headers: HeadersInit;
   private handleSaving: (
     url: string,
-    files: ExtractedTarFile[],
-    callbacks: SavedCallbackFn[]
+    tarFile: ArrayBuffer,
+    extractedCallbacks: ExtractedCallbackFn[],
+    savedCallbacks: SavedCallbackFn[]
   ) => Promise<void> = () => Promise.resolve();
   private handleZipping?: () => Promise<void>;
 
@@ -32,8 +31,9 @@ class Job {
     headers: HeadersInit,
     handleSaving: (
       url: string,
-      files: ExtractedTarFile[],
-      callbacks: SavedCallbackFn[]
+      tarFile: ArrayBuffer,
+      extractedCallbacks: ExtractedCallbackFn[],
+      savedCallbacks: SavedCallbackFn[]
     ) => Promise<void>,
     handleZipping?: () => Promise<void>
   ) {
@@ -60,15 +60,13 @@ class Job {
         }
 
         if (fetchedFile.byteLength) {
-          let extractedFiles: ExtractedTarFile[];
           try {
-            extractedFiles = await this.untarTarFile(fetchedFile);
-
-            this.extractedCallbacks.forEach((callback) => {
-              callback({ url, size, files: extractedFiles });
-            });
-
-            await this.handleSaving(url, extractedFiles, this.savedCallbacks);
+            await this.handleSaving(
+              url,
+              fetchedFile,
+              this.extractedCallbacks,
+              this.savedCallbacks
+            );
           } catch (error) {
             this.errorCallbacks.forEach((callback) =>
               callback({ url, size, error: error as Error })
@@ -157,12 +155,6 @@ class Job {
     }
 
     return fullBuffer.buffer;
-  }
-
-  async untarTarFile(arrayBuffer: ArrayBuffer): Promise<ExtractedTarFile[]> {
-    return untar(arrayBuffer).catch((error: Error) => {
-      throw new Error("Untar error:", error);
-    });
   }
 }
 

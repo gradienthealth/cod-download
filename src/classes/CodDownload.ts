@@ -1,15 +1,21 @@
+import { get, set } from "idb-keyval";
 import JsZip from "jszip";
+import untar from "js-untar";
 
 import Job from "./Job";
 import {
   BucketDetails,
   DownloadStats,
+  ExtractedCallbackFn,
   ExtractedTarFile,
+  FilesSaved,
   FilesToFetch,
   JsonMetadata,
   SavedCallbackFn,
 } from "../types";
 import metadataManager from "./MetadataManager";
+
+export const IDB_DIR_HANDLE_KEY = "indexed_db_directory_handle_key";
 
 class CodDownload {
   private directoryHandle!: FileSystemDirectoryHandle;
@@ -21,6 +27,7 @@ class CodDownload {
   };
   private headers: HeadersInit = {};
   private metadata: { metadata: JsonMetadata; saved: boolean }[] = [];
+  private filesSaved: FilesSaved = [];
   private filesToFetch: FilesToFetch = [];
   private stats: DownloadStats = {
     totalSeriesCount: 0,
@@ -31,12 +38,17 @@ class CodDownload {
     items: [],
   };
 
-  async initDirectory(): Promise<void> {
+  async initDirectory(usePrivateStorage: boolean = true): Promise<void> {
     try {
-      // @ts-ignore
-      this.directoryHandle = await window.showDirectoryPicker({
-        mode: "readwrite",
-      });
+      if (usePrivateStorage) {
+        this.directoryHandle = await window.navigator.storage.getDirectory();
+      } else {
+        // @ts-ignore
+        this.directoryHandle = await window.showDirectoryPicker({
+          mode: "readwrite",
+        });
+        await set(IDB_DIR_HANDLE_KEY, this.directoryHandle);
+      }
 
       this.filesToFetch = [];
       this.stats = {
@@ -82,14 +94,16 @@ class CodDownload {
 
   async download(
     studyInstanceUIDs: string[],
-    zipOutput: boolean = false
+    zipOutput: boolean = true
   ): Promise<Job> {
     await this.getStats(studyInstanceUIDs);
 
     const job = new Job(
       this.filesToFetch,
       this.headers,
-      this.handleSaving.bind(this),
+      zipOutput
+        ? this.handleSavingTarFiles.bind(this)
+        : this.handleSavingIndividualFiles.bind(this),
       zipOutput ? this.handleZipping.bind(this) : undefined
     );
 
@@ -169,17 +183,23 @@ class CodDownload {
 
                 let saved = false;
                 if (this.logs.length) {
-                  saved = Object.keys(metadata.cod.instances).every(
-                    (sopInstanceUID) => {
-                      const logString = this.createLogString(
-                        studyInstanceUID,
-                        seriesInstanceUID,
-                        sopInstanceUID
-                      );
-
-                      return this.logs.includes(logString);
-                    }
+                  saved = this.logs.includes(
+                    this.createLogString(studyInstanceUID, seriesInstanceUID)
                   );
+
+                  if (!saved) {
+                    saved = Object.keys(metadata.cod.instances).every(
+                      (sopInstanceUID) => {
+                        const logString = this.createLogString(
+                          studyInstanceUID,
+                          seriesInstanceUID,
+                          sopInstanceUID
+                        );
+
+                        return this.logs.includes(logString);
+                      }
+                    );
+                  }
                 }
 
                 return {
@@ -228,22 +248,20 @@ class CodDownload {
       });
       const instance = Object.values(metadata.cod.instances)[0];
 
+      const url =
+        `https://storage.googleapis.com/${bucket}/` +
+        `${bucketPrefix ? bucketPrefix + "/" : ""}studies/` +
+        instance.uri.split("studies/")[1].split("://")[0];
+
       if (saved) {
+        this.filesSaved.push({ url, size: sizeBytes });
         this.stats.totalSavedSizeBytes += sizeBytes;
         this.stats.totalSizeBytes += sizeBytes;
         this.stats.totalSavedSeriesCount++;
         return;
       }
 
-      const url =
-        `https://storage.googleapis.com/${bucket}/` +
-        `${bucketPrefix ? bucketPrefix + "/" : ""}studies/` +
-        instance.uri.split("studies/")[1].split("://")[0];
-
-      this.filesToFetch.push({
-        url,
-        size: sizeBytes,
-      });
+      this.filesToFetch.push({ url, size: sizeBytes });
       this.stats.totalSizeBytes += sizeBytes;
       this.stats.items.push(
         ...Object.values(metadata.cod.instances).map(
@@ -258,37 +276,47 @@ class CodDownload {
   }
 
   async handleZipping() {
-    const studyUIDs = this.filesToFetch.reduce((result: string[], { url }) => {
-      const studyUID = url.split("studies/")[1].split("/series")[0];
-      if (!result.includes(studyUID)) {
-        result.push(studyUID);
-      }
-      return result;
-    }, []);
+    const studyURLs = [...this.filesSaved, ...this.filesToFetch].reduce(
+      (result: Record<string, string[]>, { url }) => {
+        const studyUID = url.split("studies/")[1].split("/series")[0];
+        if (!result[studyUID]) {
+          result[studyUID] = [url];
+        } else {
+          result[studyUID].push(url);
+        }
 
-    async function addEntriesToZip(
-      files: { name: string; file: File }[],
-      zipRoot: JsZip
-    ) {
-      await Promise.all(
-        files.map(async ({ name, file }) => {
-          const fileData = new Blob([await file.arrayBuffer()], {
-            type: "application/dicom",
-          });
-          zipRoot.file(name, fileData, { createFolders: true });
-        })
-      );
+        return result;
+      },
+      {}
+    );
+
+    function addObjectToZip(zip: JsZip, obj: Object, parentPath: string = "") {
+      for (const [key, value] of Object.entries(obj)) {
+        const path = parentPath ? `${parentPath}/${key}` : key;
+        if (value instanceof Blob || value instanceof File) {
+          zip.file(path, value);
+        } else if (typeof value === "object" && value !== null) {
+          addObjectToZip(zip, value, path);
+        }
+      }
     }
 
     await Promise.all(
-      studyUIDs.map(async (studyInstanceUID) => {
+      Object.entries(studyURLs).map(async ([studyInstanceUID, urls]) => {
         const zip = new JsZip();
-        const studyDirHandle = await this.directoryHandle.getDirectoryHandle(
-          studyInstanceUID
-        );
 
-        const files = await this.readDirectory(studyDirHandle);
-        await addEntriesToZip(files, zip);
+        for (let i = 0; i < urls.length; i++) {
+          const seriesInstanceUID = urls[i]
+            .split("/series/")[1]
+            .split(".tar")[0];
+
+          const file = (await this.readFileFromFileSystem(
+            seriesInstanceUID + ".tar"
+          )) as File;
+          const extracted = await this.untarTarFile(await file.arrayBuffer());
+          const tree = this.buildFolderTree(extracted);
+          addObjectToZip(zip, { [seriesInstanceUID]: tree });
+        }
 
         const zipBlob = await zip.generateAsync({ type: "blob" });
 
@@ -304,12 +332,60 @@ class CodDownload {
     );
   }
 
-  async handleSaving(
+  async handleSavingTarFiles(
     url: string,
-    files: ExtractedTarFile[],
-    callbacks: SavedCallbackFn[]
+    tarFile: ArrayBuffer,
+    extractedCallbacks: ExtractedCallbackFn[],
+    savedCallbacks: SavedCallbackFn[]
   ) {
     try {
+      const files = await this.untarTarFile(tarFile.slice());
+      extractedCallbacks.forEach((callback) => {
+        callback({ url, files });
+      });
+
+      const [studyInstanceUID, , seriesInstanceUID] = url
+        .split("studies/")[1]
+        .split(".tar")[0]
+        .split("/");
+
+      const fileHandle = await this.directoryHandle.getFileHandle(
+        seriesInstanceUID + ".tar",
+        { create: true }
+      );
+      const writable = await fileHandle.createWritable();
+      await writable.write(tarFile);
+      await writable.close();
+
+      files.forEach((file) => {
+        savedCallbacks.forEach((callback) => {
+          callback({ url, file });
+        });
+      });
+
+      this.logs.push(this.createLogString(studyInstanceUID, seriesInstanceUID));
+    } catch (error) {
+      this.handleError(
+        `CodDownload: Error Writing series tar ${url}: `,
+        error as Error
+      );
+    } finally {
+      await this.updateLogs();
+    }
+  }
+
+  async handleSavingIndividualFiles(
+    url: string,
+    tarFile: ArrayBuffer,
+    extractedCallbacks: ExtractedCallbackFn[],
+    savedCallbacks: SavedCallbackFn[]
+  ) {
+    try {
+      const files = await this.untarTarFile(tarFile);
+      extractedCallbacks.forEach((callback) => {
+        callback({ url, files });
+      });
+
       const [studyInstanceUID, , seriesInstanceUID] = url
         .split("studies/")[1]
         .split(".tar")[0]
@@ -345,7 +421,7 @@ class CodDownload {
             await writable.write(blob);
             await writable.close();
 
-            callbacks.forEach((callback) => {
+            savedCallbacks.forEach((callback) => {
               callback({ url, file });
             });
 
@@ -366,7 +442,7 @@ class CodDownload {
       );
     } catch (error) {
       this.handleError(
-        `CodDownload: Error Writing series ${url}: `,
+        `CodDownload: Error Writing series files ${url}: `,
         error as Error
       );
     } finally {
@@ -395,12 +471,64 @@ class CodDownload {
     return (await Promise.all(promises)).flat(10);
   }
 
+  private buildFolderTree(files: ExtractedTarFile[]): Object {
+    const root = {};
+
+    files.forEach((file) => {
+      const parts = file.name.split("/");
+      let current = root;
+      const isDicom = file.name.endsWith(".dcm");
+
+      parts.forEach((part, idx) => {
+        if (idx === parts.length - 1) {
+          if (isDicom) {
+            const blob = new Blob([file.buffer], { type: "application/dicom" });
+            current[part] = blob;
+          } else {
+            current[part] = file;
+          }
+        } else {
+          // Directory
+          if (!current[part]) {
+            current[part] = {};
+          }
+          current = current[part];
+        }
+      });
+    });
+
+    return root;
+  }
+
+  async readFileFromFileSystem(
+    name: string,
+    dirHandle: FileSystemDirectoryHandle = this.directoryHandle
+  ): Promise<File | undefined> {
+    try {
+      const fileHandle = await dirHandle.getFileHandle(name);
+      return await fileHandle.getFile();
+    } catch (error) {
+      console.warn(
+        `CodDownload: Error reading file: ${name}: ` + (error as Error).message
+      );
+    }
+  }
+
+  async untarTarFile(arrayBuffer: ArrayBuffer): Promise<ExtractedTarFile[]> {
+    return untar(arrayBuffer).catch((error: Error) => {
+      throw new Error("Untar error:", error);
+    });
+  }
+
   createLogString(
     studyInstanceUID: string,
     seriesInstanceUID: string,
-    sopInstanceUID: string
+    sopInstanceUID?: string
   ): string {
-    return `${studyInstanceUID}/${seriesInstanceUID}/${sopInstanceUID}`;
+    if (sopInstanceUID) {
+      return `${studyInstanceUID}/${seriesInstanceUID}/${sopInstanceUID}`;
+    }
+    return `${studyInstanceUID}/${seriesInstanceUID}`;
   }
 
   private handleError(message: string, error: Error): Error {

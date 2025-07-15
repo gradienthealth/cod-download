@@ -109,7 +109,7 @@ describe("CodDownload", () => {
     const errorSeries = errorCasesLeft;
 
     // First time downloading, should trigger error for two, and fetch three
-    const job1 = await codDownload.download(studyUIDs);
+    const job1 = await codDownload.download(studyUIDs, false);
 
     jest
       .spyOn(job1, "streamFetchToBuffer")
@@ -129,7 +129,7 @@ describe("CodDownload", () => {
     errorCallback.mockClear();
 
     // Second time downloading, should fetch only 2 error cases from first.
-    const job2 = await codDownload.download(studyUIDs);
+    const job2 = await codDownload.download(studyUIDs, false);
 
     jest
       .spyOn(job2, "streamFetchToBuffer")
@@ -178,7 +178,11 @@ describe("CodDownload", () => {
       });
 
     jest.spyOn(codDownload, "getLogs").mockResolvedValue();
-    const handleSavingSpy = jest.spyOn(codDownload, "handleSaving");
+    jest.spyOn(codDownload, "untarTarFile").mockResolvedValue([]);
+    const handleSavingSpy = jest.spyOn(
+      codDownload,
+      "handleSavingIndividualFiles"
+    );
 
     const savedCallback = jest.fn();
     const errorCallback = jest.fn();
@@ -190,7 +194,7 @@ describe("CodDownload", () => {
     const errorSeries = errorCasesLeft;
 
     // First time downloading, should trigger error for two, and fetch three
-    const job1 = await codDownload.download(studyUIDs);
+    const job1 = await codDownload.download(studyUIDs, false);
 
     job1.onSave(savedCallback);
     job1.onError(errorCallback);
@@ -198,32 +202,33 @@ describe("CodDownload", () => {
     jest
       .spyOn(job1, "streamFetchToBuffer")
       .mockImplementation(fetchFilesMockFn.bind(null, true));
-    jest.spyOn(job1, "untarTarFile").mockResolvedValue([]);
-    handleSavingSpy.mockImplementation((url, files, callbacks) => {
-      if (url.includes("error")) {
-        // Since we have specified to create metadata of the first two series with error in their url,
-        // we can throw error for those two series.
-        throw new Error("Error extracting tar file");
-      }
+    handleSavingSpy.mockImplementation(
+      (url, tarFile, extractedCallbacks, savedCallbacks) => {
+        if (url.includes("error")) {
+          // Since we have specified to create metadata of the first two series with error in their url,
+          // we can throw error for those two series.
+          throw new Error("Error extracting tar file");
+        }
 
-      const [studyInstanceUID, , seriesInstanceUID] = url
-        .split("studies/")[1]
-        .split(".tar")[0]
-        .split("/");
+        const [studyInstanceUID, , seriesInstanceUID] = url
+          .split("studies/")[1]
+          .split(".tar")[0]
+          .split("/");
 
-      ["sopUID.1", "sopUID.2"].forEach((sopInstanceUID) =>
-        codDownload["logs"].push(
-          codDownload.createLogString(
-            studyInstanceUID,
-            seriesInstanceUID,
-            sopInstanceUID
+        ["sopUID.1", "sopUID.2"].forEach((sopInstanceUID) =>
+          codDownload["logs"].push(
+            codDownload.createLogString(
+              studyInstanceUID,
+              seriesInstanceUID,
+              sopInstanceUID
+            )
           )
-        )
-      );
-      // @ts-ignore
-      callbacks.forEach((callback) => callback());
-      return Promise.resolve();
-    });
+        );
+        // @ts-ignore
+        savedCallbacks.forEach((callback) => callback());
+        return Promise.resolve();
+      }
+    );
 
     await job1.start();
 
@@ -239,20 +244,24 @@ describe("CodDownload", () => {
     const restOfTheSeries = errorSeries;
 
     // Second time downloading, should fetch only 2 error cases from first
-    const job2 = await codDownload.download(["studyUID.1", "studyUID.2"]);
+    const job2 = await codDownload.download(
+      ["studyUID.1", "studyUID.2"],
+      false
+    );
     job2.onSave(savedCallback);
     job2.onError(errorCallback);
 
     jest
       .spyOn(job2, "streamFetchToBuffer")
       .mockImplementation(fetchFilesMockFn.bind(null, false));
-    jest.spyOn(job2, "untarTarFile").mockResolvedValue([]);
     // On the second time, we are not throwing ans errors so that the restOfTheeries can be extracted.
-    handleSavingSpy.mockImplementation((url, files, callbacks) => {
-      // @ts-ignore
-      callbacks.forEach((callback) => callback());
-      return Promise.resolve();
-    });
+    handleSavingSpy.mockImplementation(
+      (url, tarFile, extractedCallbacks, savedCallbacks) => {
+        // @ts-ignore
+        savedCallbacks.forEach((callback) => callback());
+        return Promise.resolve();
+      }
+    );
 
     await job2.start();
 

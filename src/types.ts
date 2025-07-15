@@ -5,6 +5,7 @@ export type BucketDetails = {
 };
 
 export type FilesToFetch = { url: string; size: number }[];
+export type FilesSaved = { url: string; size: number }[];
 
 export type DownloadStats = {
   totalSeriesCount: number;
@@ -90,7 +91,6 @@ export type DownloadedCallbackFn = (props: {
 
 export type ExtractedCallbackFn = (props: {
   url: string;
-  size: number;
   files: ExtractedTarFile[];
 }) => void;
 
